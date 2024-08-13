@@ -2,6 +2,9 @@ import rpy2.robjects as robjects
 from rpy2.robjects import pandas2ri
 from rpy2.robjects.conversion import localconverter
 import numpy as np
+import os
+
+print(os.getcwd)
 
 # Enable automatic conversion of R objects to pandas DataFrames
 pandas2ri.activate()
@@ -41,7 +44,7 @@ def jitter(values, amount):
     return values + np.random.uniform(-amount, amount)
 
 
-my_sample["s1"] = jitter(my_sample["s1"], amount=cellsize / 2)
-my_sample["s2"] = jitter(my_sample["s2"], amount=cellsize / 2)
+my_sample.loc[:, "s1"] = jitter(my_sample["s1"], amount=cellsize / 2)
+my_sample.loc[:, "s2"] = jitter(my_sample["s2"], amount=cellsize / 2)
 
 print(my_sample.head())
