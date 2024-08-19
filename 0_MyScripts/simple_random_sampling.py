@@ -1,18 +1,21 @@
 import rpy2.robjects as robjects
 from rpy2.robjects import pandas2ri
 from rpy2.robjects.conversion import localconverter
+from rpy2.robjects.packages import importr
 import numpy as np
 import os
 import seaborn as sns
-import matplotlib
 import scipy.stats as stats
+import matplotlib
 
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 import statsmodels.stats.api as sms
+import statsmodels.api as sm
 
 # import pandas as pd
 
+# os.chdir()
 print(os.getcwd)
 
 # Enable automatic conversion of R objects to pandas DataFrames
@@ -21,7 +24,7 @@ pandas2ri.activate()
 # Load the .rda file
 robjects.r["load"]("data/grdVoorst.rda")
 
-# Assuming the R data frame is called 'df'
+# Assuming the R data frame is called 'grdVoorst'
 r_grdVoorst_df = robjects.r["grdVoorst"]
 
 # Convert to pandas DataFrame if it's an R DataFrame
@@ -56,7 +59,7 @@ np.random.seed(314)
 units = np.random.choice(N, size=n, replace=True)
 # python unit index generation is different and thus yields different results compared to R sampling.
 
-""" R units = [
+r_units = [
     6478,
     1408,
     1084,
@@ -97,12 +100,12 @@ units = np.random.choice(N, size=n, replace=True)
     6958,
     1732,
     3907,
-]"""
+]
 
 # Check sampled indices
-print("Sampled indices:", units)
+print("Sampled indices:", r_units)
 
-my_sample = pd_grdVoorst_df.iloc[units, :]
+my_sample = pd_grdVoorst_df.iloc[r_units, :]
 
 print(my_sample.head())
 
@@ -239,7 +242,10 @@ ci = bootstrap_ci(z, q=0.5, alpha=0.05)
 print(f"Confidence interval for the median: {ci}")
 
 
-def exact_binomial_ci(data, q, alpha=0.05):
+# Using exact binomial for confidence calculations
+
+
+def second_exact_binomial_ci(data, q, alpha=0.05):
     """
     Compute the exact binomial confidence interval for a quantile.
 
@@ -252,19 +258,15 @@ def exact_binomial_ci(data, q, alpha=0.05):
     - Tuple (lower_bound, upper_bound) representing the confidence interval.
     """
     n = len(data)
-    k = int(np.floor(n * q))  # The rank of the quantile in the sorted data
     sorted_data = np.sort(data)
 
-    # Exact binomial confidence limits
-    ci_low = sms.binom_test(k, n, prop=q, alternative="two-sided") / 2
-    ci_high = sms.binom_test(k + 1, n, prop=q, alternative="two-sided") / 2
+    # Calculate the lower and upper bounds for the confidence interval
+    k_low = int(stats.binom.ppf(alpha / 2, n, q))
+    k_high = int(stats.binom.ppf(1 - alpha / 2, n, q))
 
-    lower_bound_index = int(np.floor(n * ci_low))
-    upper_bound_index = int(np.ceil(n * (1 - ci_high)))
-
-    # Bound the indices within valid range
-    lower_bound_index = max(0, lower_bound_index)
-    upper_bound_index = min(n - 1, upper_bound_index)
+    # Ensure the bounds are within the data range
+    lower_bound_index = max(0, k_low)
+    upper_bound_index = min(n - 1, k_high)
 
     return sorted_data[lower_bound_index], sorted_data[upper_bound_index]
 
@@ -274,6 +276,126 @@ def exact_binomial_ci(data, q, alpha=0.05):
 z = my_sample["z"]
 
 # Compute the confidence interval for the 0.5 quantile (median) with alpha = 0.05
-ci = exact_binomial_ci(z, q=0.5, alpha=0.05)
+ci = second_exact_binomial_ci(z, q=0.5, alpha=0.05)
 
-print(f"Exact binomial confidence interval for the median: {ci}")
+print(f"Second Exact binomial confidence interval for the median: {ci}")
+
+se_mz = np.sqrt(np.var(z, ddof=1) / n)
+print(se_mz)
+
+# the estimated standard error of the estimated total (note that this does not account for the spatial variation of soil bulk density)
+se_tz = se_mz * vol_soil * bd * 10**-6
+print(se_tz)
+
+# my_sample["pi"] = my_sample.apply(lambda row: n / N, axis=1)
+
+my_sample = my_sample.copy()
+my_sample.loc[:, "pi"] = n / N
+my_sample.loc[:, "N"] = N
+
+print(my_sample)
+
+# Import the R survey package
+survey = importr("survey")
+
+# Example: Convert pandas DataFrame to R dataframe
+r_df = pandas2ri.py2rpy(my_sample)
+
+# Set up the survey design in R
+r_design_si = survey.svydesign(
+    ids=robjects.Formula("~1"), probs=robjects.Formula("~pi"), data=r_df
+)
+
+# Disable automatic conversion to ensure we work with R objects directly
+with localconverter(robjects.default_converter):
+    r_mean = survey.svymean(robjects.Formula("~z"), r_design_si, se=True)
+
+# Convert the result to a dictionary-like structure
+result_dict = dict(zip(r_mean.names, list(r_mean)))
+print(result_dict)
+
+# Extract and print the mean and its standard error
+mean_estimate = result_dict["z"]
+# standard_error = result_dict["SE"]
+
+# print(f"Mean: {mean_estimate[0]}")
+# print(f"Standard Error: {standard_error[0]}")
+
+z = my_sample["z"]
+weights = 1 / my_sample["pi"]
+
+# Compute the weighted mean
+weighted_mean = np.sum(weights * z) / np.sum(weights)
+print(weighted_mean)
+
+# Compute the weighted variance
+weighted_variance = np.sum(weights * (z - weighted_mean) ** 2) / (
+    np.sum(weights) - (N / n)
+)
+print(weighted_variance)
+
+# Number of observations
+n = len(my_sample)
+
+# Calculate the standard error
+standard_error = np.sqrt(weighted_variance / n)
+print(standard_error)
+
+var = np.var(z, ddof=1)
+print(var)
+
+std = np.sqrt(var / n)
+print(std)
+
+alpha = 0.05
+# Calculate the t-distribution critical value
+margin = stats.t.ppf(1 - alpha / 2, df=n - 1) * se_mz
+print(stats.t.ppf(1 - alpha / 2, df=n - 1))
+print(margin)
+print(mz)
+
+# Calculate the lower and upper bounds of the confidence interval
+lower = mz - margin
+upper = mz + margin
+
+print(f"Lower bound: {lower}")
+print(f"Upper bound: {upper}")
+
+import statsmodels.stats.proportion as smp
+
+# Parameters
+n = 40  # Number of trials
+k = 20  # Number of successes
+conf_level = 0.95  # Confidence level
+
+# Calculate the Clopper-Pearson (exact) confidence interval
+lower_bound, upper_bound = smp.proportion_confint(
+    k, n, alpha=1 - conf_level, method="beta"
+)
+
+print(f"cdf of upper bound {stats.binom.cdf(20, n, upper_bound)}")
+# Calculate the cumulative probability
+from scipy.stats import binom
+
+print(f"cdf of upper bound {binom.cdf(20, n, upper_bound)}")
+
+# Print the results
+print(f"Clopper-Pearson Confidence Interval: [{lower_bound}, {upper_bound}]")
+
+sorted_data = np.sort(z)
+
+# Calculate the lower and upper bounds for the confidence interval
+k_low = int(np.round(n * lower_bound))
+k_high = int(np.round(n * upper_bound))
+
+# Ensure the bounds are within the data range
+lower_bound_index = max(0, k_low)
+upper_bound_index = min(n - 1, k_high)
+
+print(
+    f"confidence interval using C_P confidence {sorted_data[lower_bound_index]}, {sorted_data[upper_bound_index]}"
+)
+
+ci = second_exact_binomial_ci(z, q=0.5, alpha=0.05)
+
+print(f"Second Exact binomial confidence interval for the median: {ci}")

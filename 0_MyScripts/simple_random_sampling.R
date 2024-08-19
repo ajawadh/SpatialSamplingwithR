@@ -32,12 +32,10 @@ units <- sample(N, size=n, replace = TRUE)
 print(units)
 
 mysample <- grdVoorst[units, ]
-print(mysample)
 
 cellsize <- 25
 mysample$s1 <- jitter(mysample$s1, amount = cellsize / 2)
 mysample$s2 <- jitter(mysample$s2, amount = cellsize / 2)
-print(mysample)
 
 # calculating the mean of sample
 mz <- mean(mysample$z)
@@ -64,7 +62,31 @@ print(p)
 
 quantile(mysample$z, probs = c(0.25, 0.5, 0.75), type = 4) %>%
   round(1)
-print(quantile())
 
 res <- quantCI(mysample$z, q = 0.5, alpha = 0.05, method = "exact")
 print(res)
+
+se_mz <- sqrt(var(mysample$z) / n)
+print(se_mz)
+
+se_tz <- se_mz * vol_soil * bd * 10^-6
+print(se_tz)
+
+
+library(survey)
+mysample$pi <- n / N
+design_si <- svydesign(id = ~ 1, probs = ~ pi, data = mysample)
+print(svymean(~ z, design = design_si))
+
+mysample$N <- N
+design_si_fp <- svydesign(id = ~ 1, probs = ~ pi, fpc = ~ N, data = mysample)
+print(svymean(~ z, design_si_fp))
+
+print(svyquantile(~ z, design_si, quantile = c(0.5, 0.9)))
+
+alpha <- 0.05
+margin <- qt(1 - alpha / 2, n - 1, lower.tail = TRUE) * se_mz
+lower <- mz - margin
+upper <- mz + margin
+
+confint(svymean(~ z, design_si), df = degf(design_si), level = 0.95)
